@@ -213,6 +213,26 @@ canvas#game {
   backdrop-filter: blur(7px);
   transition: opacity .26s ease, visibility .26s ease;
 }
+.loading-box {
+  text-align: center;
+  padding: 0 22px;
+  max-width: 300px;
+}
+.loading-text {
+  font-size: 15px;
+  color: #8a6038;
+  line-height: 1.95;
+}
+.loading-text b { color: #cf5220; font-weight: 700; }
+.loading-text .sub {
+  display: block;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: #a9855f;
+  word-break: break-all;
+}
+.loading-box .btn { margin-top: 16px; }
+
 .overlay.hidden {
   opacity: 0;
   visibility: hidden;

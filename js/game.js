@@ -35,6 +35,9 @@
   var nextImg     = document.getElementById('next-img');
   var nextDot     = document.getElementById('next-dot');
   var soundBtn    = document.getElementById('sound-btn');
+  var loadingEl   = document.getElementById('loading');
+  var loadingText = document.getElementById('loading-text');
+  var loadingOk   = document.getElementById('loading-ok');
   var overOv      = document.getElementById('over-overlay');
   var againBtn    = document.getElementById('again-btn');
   var finalScore  = document.getElementById('final-score');
@@ -58,6 +61,7 @@
   /* ---------------------------- 状态 ---------------------------- */
 
   var S = {
+    assetsReady: false,
     mode: 'ready',        // ready | playing | over
     score: 0,
     best: Number(storeGet('best', 0)) || 0,
@@ -561,13 +565,59 @@
 
   /* ---------------------------- 素材 ---------------------------- */
 
+  /* 素材加载：带进度、失败重试一次、失败清单。
+   * 没加载完就开局，缺图的等级会画成备用渐变色 —— 看起来像"资源坏了"。 */
+  var loadState = { total: 0, done: 0, failed: [] };
+
+  function updateLoading() {
+    if (!loadingText) return;
+    if (loadState.done < loadState.total) {
+      loadingText.innerHTML = '正在载入素材 ' + loadState.done + ' / ' + loadState.total;
+      loadingOk.classList.add('hidden');
+      loadingEl.classList.remove('hidden');
+      S.assetsReady = false;
+      return;
+    }
+    if (loadState.failed.length) {
+      loadingText.innerHTML = '<b>' + loadState.failed.length + ' 个素材没加载出来</b>' +
+        '<span class="sub">' + loadState.failed.join('<br>') + '</span>' +
+        '<span class="sub">检查文件是否已上传、大小写是否一致</span>';
+      loadingOk.classList.remove('hidden');
+      loadingEl.classList.remove('hidden');
+      return;
+    }
+    loadingEl.classList.add('hidden');
+    S.assetsReady = true;
+    thaw();
+  }
+
   function loadSprites() {
+    loadState.total = FRUITS.filter(function (f) { return !!f.sprite; }).length;
+    loadState.done = 0;
+    loadState.failed = [];
+    updateLoading();
+
     FRUITS.forEach(function (f, i) {
       if (!f.sprite) return;
+      var tries = 0;
       var img = new Image();
       img.decoding = 'async';
-      img.onload = function () { sprites[i] = bake(img, f.sprite); };
-      img.onerror = function () { console.warn('[素材加载失败] ' + f.sprite); };
+      img.onload = function () {
+        sprites[i] = bake(img, f.sprite);
+        loadState.done++;
+        updateLoading();
+      };
+      img.onerror = function () {
+        if (tries++ === 0) {                 // 重试一次，加参数绕开缓存
+          img.src = f.sprite + (f.sprite.indexOf('?') < 0 ? '?r=1' : '&r=1');
+          return;
+        }
+        loadState.failed.push(f.sprite);
+        loadState.done++;
+        updateLoading();
+        console.error('[素材加载失败] ' + f.sprite + ' → ' +
+          new URL(f.sprite, location.href).href);
+      };
       img.src = f.sprite;
     });
   }
@@ -1268,7 +1318,7 @@
   }
 
   function onDown(e) {
-    if (S.mode !== 'playing') return;
+    if (!S.assetsReady || S.mode !== 'playing') return;
     e.preventDefault();
     S.dragging = true;
     pointerX(e);
@@ -1290,6 +1340,14 @@
     if (S.mode !== 'playing') return;
     pointerX(e);
     dropCurrent();
+  }
+
+  if (loadingOk) {
+    loadingOk.addEventListener('click', function () {
+      loadingEl.classList.add('hidden');
+      S.assetsReady = true;
+      thaw();
+    });
   }
 
   canvas.addEventListener('pointerdown', onDown, { passive: false });

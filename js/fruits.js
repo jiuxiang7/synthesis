@@ -59,16 +59,16 @@ var GAME_CONFIG = {
    *  rotate        是否跟随物理旋转（有明确朝向的素材可以设 false）
    */
   fruits: [
-    { name: '电',   radius: 13, score: 0,  color: '#9a6ce0', color2: '#6236ad', sprite: 'assets/fruits/01-uestc.png',     spriteScale: 1.02, spriteOffsetY: 0,    rotate: 0.4  },
-    { name: '奶蛋',   radius: 16, score: 2,  color: '#e63b3b', color2: '#a81414', sprite: 'assets/fruits/02-egg.png',    spriteScale: 1.05, spriteOffsetY: 0,    rotate: 0.4  },
-    { name: '奶鼠',   radius: 26, score: 5,  color: '#ff9a1f', color2: '#dd6a00', sprite: 'assets/fruits/03-mice.png',    spriteScale: 1.05, spriteOffsetY: 0,    rotate: true  },
-    { name: '奶鸡',   radius: 35, score: 9,  color: '#ffe14d', color2: '#e0af00', sprite: 'assets/fruits/04-chicken.png',     spriteScale: 1.08, spriteOffsetY: 0,    rotate: 0.4  },
-    { name: '奶狗', radius: 45, score: 14, color: '#a6d94f', color2: '#6b4220', sprite: 'assets/fruits/05-dog.png',      spriteScale: 1.00, spriteOffsetY: 0,    rotate: true  },
-    { name: '奶猪',   radius: 60, score: 20, color: '#ec3b2f', color2: '#b31b12', sprite: 'assets/fruits/06-pig.png',    spriteScale: 1.08, spriteOffsetY: -0.02, rotate: 0.4 },
-    { name: '奶马', radius: 67, score: 28, color: '#ff9f8c', color2: '#d43a52', sprite: 'assets/fruits/07-horse.png',     spriteScale: 1.08, spriteOffsetY: 0,    rotate: 0.4  },
-    { name: '奶嘟嘟',   radius: 85, score: 38, color: '#f6b93b', color2: '#c98211', sprite: 'assets/fruits/08-kangaroo.png', spriteScale: 1.06, spriteOffsetY: 0.05, rotate: 0.4  },
-    { name: '奶龙',   radius: 100, score: 50, color: '#8b5a30', color2: '#5d3a1c', sprite: 'assets/fruits/09-long.png',   spriteScale: 1.00, spriteOffsetY: 0,    rotate: true  },
-    { name: '川', radius: 13, score: 65, color: '#ff5a6e', color2: '#2f8b3f', sprite: 'assets/fruits/10-scu.png', spriteScale: 1.02, spriteOffsetY: 0.1, rotate: true }
+    { name: '电',   radius: 13, score: 0,  color: '#9a6ce0', color2: '#6236ad', sprite: 'assets/fruits/01-uestc.webp',     spriteScale: 1.02, spriteOffsetY: 0,    rotate: 0.4  },
+    { name: '奶蛋',   radius: 16, score: 2,  color: '#e63b3b', color2: '#a81414', sprite: 'assets/fruits/02-egg.webp',    spriteScale: 1.05, spriteOffsetY: 0,    rotate: 0.4  },
+    { name: '奶鼠',   radius: 26, score: 5,  color: '#ff9a1f', color2: '#dd6a00', sprite: 'assets/fruits/03-mice.webp',    spriteScale: 1.05, spriteOffsetY: 0,    rotate: true  },
+    { name: '奶鸡',   radius: 35, score: 9,  color: '#ffe14d', color2: '#e0af00', sprite: 'assets/fruits/04-chicken.webp',     spriteScale: 1.08, spriteOffsetY: 0,    rotate: 0.4  },
+    { name: '奶狗', radius: 45, score: 14, color: '#a6d94f', color2: '#6b4220', sprite: 'assets/fruits/05-dog.webp',      spriteScale: 1.00, spriteOffsetY: 0,    rotate: true  },
+    { name: '奶猪',   radius: 60, score: 20, color: '#ec3b2f', color2: '#b31b12', sprite: 'assets/fruits/06-pig.webp',    spriteScale: 1.08, spriteOffsetY: -0.02, rotate: 0.4 },
+    { name: '奶马', radius: 67, score: 28, color: '#ff9f8c', color2: '#d43a52', sprite: 'assets/fruits/07-horse.webp',     spriteScale: 1.08, spriteOffsetY: 0,    rotate: 0.4  },
+    { name: '奶嘟嘟',   radius: 85, score: 38, color: '#f6b93b', color2: '#c98211', sprite: 'assets/fruits/08-kangaroo.webp', spriteScale: 1.06, spriteOffsetY: 0.05, rotate: 0.4  },
+    { name: '奶龙',   radius: 100, score: 50, color: '#8b5a30', color2: '#5d3a1c', sprite: 'assets/fruits/09-long.webp',   spriteScale: 1.00, spriteOffsetY: 0,    rotate: true  },
+    { name: '川', radius: 13, score: 65, color: '#ff5a6e', color2: '#2f8b3f', sprite: 'assets/fruits/10-scu.webp', spriteScale: 1.02, spriteOffsetY: 0.1, rotate: true }
   ]
 };
 
