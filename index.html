@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#ffeada">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="format-detection" content="telephone=no">
+<title>合成大奶龙</title>
+<link rel="icon" type="image/png" sizes="128x128" href="assets/icon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/icon-180.png">
+<link rel="shortcut icon" href="assets/icon.png">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app">
+
+  <header class="hud">
+    <div class="hud-cell left">
+      <span class="hud-label">最高</span>
+      <strong class="hud-value" id="best">0</strong>
+    </div>
+
+    <div class="score-cell">
+      <div class="score" id="score">0</div>
+      <div class="combo-tag" id="combo"></div>
+    </div>
+
+    <div class="hud-cell right">
+      <div class="next-wrap">
+        <span class="hud-label">下一个</span>
+        <div class="next-chip">
+          <img id="next-img" alt="">
+          <i id="next-dot"></i>
+        </div>
+      </div>
+      <button class="icon-btn" id="sound-btn" type="button" aria-label="音效开关">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path class="spk" d="M4 9.5h3.2L12 5.6v12.8L7.2 14.5H4z" fill="currentColor"/>
+          <path class="wave" d="M15.2 8.4a5 5 0 0 1 0 7.2M17.6 6a8.4 8.4 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="stage" id="stage">
+    <canvas id="game"></canvas>
+
+    <section class="overlay hidden" id="over-overlay">
+      <div class="panel">
+        <div class="badge hidden" id="new-record">🎉 新纪录</div>
+        <h2 class="over-title">游戏结束</h2>
+        <div class="final">
+          <span>本局得分</span>
+          <b id="final-score">0</b>
+        </div>
+        <div class="final-best">历史最高 <b id="final-best">0</b></div>
+        <button class="btn" id="again-btn" type="button">再来一局</button>
+      </div>
+    </section>
+  </main>
+
+</div>
+
+<script src="lib/matter.min.js"></script>
+<script src="js/fruits.js"></script>
+<script src="js/assets-meta.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>
