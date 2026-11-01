@@ -19,6 +19,20 @@ var GAME_CONFIG = {
     deathY: 92       // 死亡线高度：果子堆过这条线并保持一段时间就结束
   },
 
+  /* ------------------------- 素材来源（可选） ------------------------- */
+  /* 国内直连 GitHub Pages 常常要十几秒才响应。把素材放到更快的 CDN（比如 jsDelivr
+   * 直接读这个仓库）能立竿见影，文件一个都不用挪：
+   *
+   *   spriteBase: 'https://cdn.jsdelivr.net/gh/用户名/仓库名@main/assets/fruits/'
+   *
+   * 留空 = 用仓库里的相对路径。注意末尾要带斜杠。 */
+  assets: {
+    /* 素材走 jsDelivr（免费、不用注册，直接读这个公开仓库）。
+     * 万一 CDN 不通，代码会自动回退到仓库里的相对路径，不会卡死。
+     * 想改回本地：把这里清空成 '' 即可。 */
+    spriteBase: 'https://cdn.jsdelivr.net/gh/jiuxiang7/synthesis@main/assets/fruits/'
+  },
+
   /* ---------------------------- 物理 ---------------------------- */
   physics: {
     gravity: 1.0,           // 重力，越大掉得越快

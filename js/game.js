@@ -37,7 +37,6 @@
   var soundBtn    = document.getElementById('sound-btn');
   var loadingEl   = document.getElementById('loading');
   var loadingText = document.getElementById('loading-text');
-  var loadingOk   = document.getElementById('loading-ok');
   var overOv      = document.getElementById('over-overlay');
   var againBtn    = document.getElementById('again-btn');
   var finalScore  = document.getElementById('final-score');
@@ -565,60 +564,132 @@
 
   /* ---------------------------- 素材 ---------------------------- */
 
-  /* 素材加载：带进度、失败重试一次、失败清单。
-   * 没加载完就开局，缺图的等级会画成备用渐变色 —— 看起来像"资源坏了"。 */
-  var loadState = { total: 0, done: 0, failed: [] };
+  /* 素材加载：全部就绪才允许开局。
+   * 前 6 级优先下载（开局只会出现这几级），其余并行下载；
+   * 任何一张没加载完都不放开操作，避免缺图的等级画成备用渐变色。 */
+  var CRITICAL = 6;                     // 只用来标记下载优先级，不再分批放行
+  var loadState = { done: 0, total: 0, failed: [], t0: 0 };
 
   function updateLoading() {
     if (!loadingText) return;
+
     if (loadState.done < loadState.total) {
       loadingText.innerHTML = '正在载入素材 ' + loadState.done + ' / ' + loadState.total;
-      loadingOk.classList.add('hidden');
       loadingEl.classList.remove('hidden');
       S.assetsReady = false;
       return;
     }
+
     if (loadState.failed.length) {
-      loadingText.innerHTML = '<b>' + loadState.failed.length + ' 个素材没加载出来</b>' +
-        '<span class="sub">' + loadState.failed.join('<br>') + '</span>' +
-        '<span class="sub">检查文件是否已上传、大小写是否一致</span>';
-      loadingOk.classList.remove('hidden');
+      loadingText.innerHTML = '正在载入素材 ' + loadState.done + ' / ' + loadState.total +
+        
+        '<span class="sub">检查网络后刷新重试</span>';
       loadingEl.classList.remove('hidden');
       return;
     }
+
     loadingEl.classList.add('hidden');
-    S.assetsReady = true;
-    thaw();
+    if (!S.assetsReady) {
+      S.assetsReady = true;
+      S.loadMs = Math.round(performance.now() - loadState.t0);
+      if (DEBUG) console.info('[载入] 可开始游戏用时 ' + S.loadMs + 'ms');
+      setTimeout(collectTiming, 0);
+      thaw();
+    }
+  }
+
+  /* 首屏耗时诊断（?debug=1 时打到控制台 + 画在角落），用来区分"服务端慢"和"文件大" */
+  var netInfo = null;
+  function collectTiming() {
+    try {
+      var nav = performance.getEntriesByType('navigation')[0];
+      var res = performance.getEntriesByType('resource');
+      var bytes = 0, slow = { n: '', ms: 0 }, count = 0;
+      for (var i = 0; i < res.length; i++) {
+        bytes += res[i].transferSize || 0;
+        count++;
+        var ms = res[i].responseEnd - res[i].startTime;
+        if (ms > slow.ms) slow = { n: res[i].name.split('/').pop(), ms: ms };
+      }
+      netInfo = {
+        ttfb: nav ? Math.round(nav.responseStart) : 0,
+        html: nav ? Math.round(nav.responseEnd) : 0,
+        total: Math.round(performance.now()),
+        reqs: count,
+        kb: Math.round(bytes / 1024),
+        slow: slow.n + ' ' + Math.round(slow.ms) + 'ms'
+      };
+      console.info('[首屏]', JSON.stringify(netInfo));
+    } catch (e) {}
+  }
+
+  /* 素材地址：默认用仓库里的相对路径；配置了 assets.spriteBase 就走 CDN */
+  var SPRITE_BASE = (CFG.assets && CFG.assets.spriteBase) || '';
+  function spriteURL(path) {
+    return SPRITE_BASE ? SPRITE_BASE + path.replace(/^assets\/fruits\//, '') : path;
+  }
+
+  /* 素材地址：默认仓库相对路径；配了 assets.spriteBase 就先走 CDN。
+   * 另外做了"竞速"：CDN 超过 RACE_MS 还没回，就同时开始拉本地文件，谁先到用谁。
+   * 这样 CDN 抽风/绕路时最多损失一点点时间，不会把开局拖到十几秒。 */
+  var RACE_MS = 1800;
+
+  function loadOne(f, i, critical) {
+    var settled = false;
+    var timer = null;
+
+    function settle(ok, img) {
+      if (settled) return;
+      settled = true;
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (ok) {
+        sprites[i] = bake(img, f.sprite);
+      } else {
+        loadState.failed.push(f.sprite);
+        console.error('[素材加载失败] ' + f.sprite);
+      }
+      loadState.done++;
+      updateLoading();
+    }
+
+    function make(url) {
+      var im = new Image();
+      im.decoding = 'async';
+      if (critical && 'fetchPriority' in im) im.fetchPriority = 'high';
+      im.src = url;
+      return im;
+    }
+
+    /* 拉仓库里的本地文件；giveUp=true 时失败就直接判失败 */
+    function startLocal(giveUp) {
+      if (settled) return;
+      var im = make(f.sprite);
+      im.onload = function () { settle(true, im); };
+      im.onerror = function () { if (giveUp) settle(false); };
+    }
+
+    if (!SPRITE_BASE) {
+      var a = make(f.sprite);
+      a.onload = function () { settle(true, a); };
+      a.onerror = function () { startLocal(true); };   // 再试一次本地（带缓存绕行）
+      return;
+    }
+
+    var c = make(spriteURL(f.sprite));
+    c.onload = function () { settle(true, c); };
+    c.onerror = function () { startLocal(true); };
+    timer = setTimeout(function () { startLocal(false); }, RACE_MS);
   }
 
   function loadSprites() {
-    loadState.total = FRUITS.filter(function (f) { return !!f.sprite; }).length;
+    loadState.t0 = performance.now();
     loadState.done = 0;
     loadState.failed = [];
+    loadState.total = FRUITS.filter(function (f) { return !!f.sprite; }).length;
     updateLoading();
 
     FRUITS.forEach(function (f, i) {
-      if (!f.sprite) return;
-      var tries = 0;
-      var img = new Image();
-      img.decoding = 'async';
-      img.onload = function () {
-        sprites[i] = bake(img, f.sprite);
-        loadState.done++;
-        updateLoading();
-      };
-      img.onerror = function () {
-        if (tries++ === 0) {                 // 重试一次，加参数绕开缓存
-          img.src = f.sprite + (f.sprite.indexOf('?') < 0 ? '?r=1' : '&r=1');
-          return;
-        }
-        loadState.failed.push(f.sprite);
-        loadState.done++;
-        updateLoading();
-        console.error('[素材加载失败] ' + f.sprite + ' → ' +
-          new URL(f.sprite, location.href).href);
-      };
-      img.src = f.sprite;
+      if (f.sprite) loadOne(f, i, i < CRITICAL);
     });
   }
 
@@ -1210,12 +1281,29 @@
     drawEffects();
     drawDanger();
     drawCurrent();
-    if (DEBUG) drawHitboxes();
+    if (DEBUG) { drawHitboxes(); drawDebugInfo(); }
 
     ctx.restore();
   }
 
   /* 调素材用：显示每个果子的圆形碰撞体，方便对齐「图上大小」与「实际碰撞」 */
+  function drawDebugInfo() {
+    if (!netInfo) return;
+    ctx.save();
+    ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+    ctx.font = '11px ui-monospace, Menlo, Consolas, monospace';
+    ctx.textAlign = 'left';          // 之前画分数的函数把它改成了 center
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = 'rgba(60, 40, 20, .78)';
+    var lines = [
+      'TTFB ' + netInfo.ttfb + 'ms   HTML ' + netInfo.html + 'ms',
+      '可玩 ' + (S.loadMs || 0) + 'ms   请求 ' + netInfo.reqs + ' 个   ' + netInfo.kb + 'KB',
+      '最慢 ' + netInfo.slow
+    ];
+    for (var i = 0; i < lines.length; i++) ctx.fillText(lines[i], 10, 16 + i * 14);
+    ctx.restore();
+  }
+
   function drawHitboxes() {
     ctx.save();
     ctx.setLineDash([4, 3]);
@@ -1340,14 +1428,6 @@
     if (S.mode !== 'playing') return;
     pointerX(e);
     dropCurrent();
-  }
-
-  if (loadingOk) {
-    loadingOk.addEventListener('click', function () {
-      loadingEl.classList.add('hidden');
-      S.assetsReady = true;
-      thaw();
-    });
   }
 
   canvas.addEventListener('pointerdown', onDown, { passive: false });

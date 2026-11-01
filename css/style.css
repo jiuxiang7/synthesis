@@ -231,7 +231,6 @@ canvas#game {
   color: #a9855f;
   word-break: break-all;
 }
-.loading-box .btn { margin-top: 16px; }
 
 .overlay.hidden {
   opacity: 0;
