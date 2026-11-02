@@ -72,8 +72,8 @@
     soundOn: storeGet('sound', '1') !== '0',
     time: 0,
     current: null,        // { level, x, born } 手里这颗
-    pending: 0,           // 这颗落下后「真正会出现」的那一颗
-    nextLevel: 0,         // 「下一个」显示的：pending 之后的那一颗
+    nextLevel: 0,         // 「下一个」显示的那颗 —— 也是落下后立刻到手上的那颗
+    backup: 0,            // 藏在后面的备胎：手上换人时它顶上「下一个」的位置
     cooldown: 0,
     dragging: false,
     pointerX: W / 2,
@@ -301,9 +301,12 @@
     first = Math.min(first, Math.min(RULES.spawnLevels, FRUITS.length) - 1);
     spawnSeq.push(first);
 
-    S.current = { level: first, x: W / 2, born: S.time };   // 手上
-    S.pending = nextSpawnLevel();                            // 落下后到手
-    S.nextLevel = nextSpawnLevel();                          // 「下一个」显示
+    /* 三格队列，顺序就是它们到手上的顺序：
+     *   current（手上） → nextLevel（「下一个」，落下后接手） → backup（备胎，补位用）
+     * 「下一个」永远显示 nextLevel，也就是你落下手上这颗之后**立刻**拿到的那颗。 */
+    S.current = { level: first, x: W / 2, born: S.time };
+    S.nextLevel = nextSpawnLevel();
+    S.backup = nextSpawnLevel();
     updateNextChip();
   }
 
@@ -379,19 +382,23 @@
     sfx.drop();
     S.cooldown = RULES.dropCooldown;
 
-    /* 掉落的同时把下一颗直接拿到手上：
-     *   · 手上永远有果子（以前会有 340ms 空窗，期间既不能瞄也不能投）
-     *   · 「下一个」只在换手这一瞬间变一次，之后不再跳
-     *   · chip 永远等于"手上这颗之后的那颗"，不会和即将出现的不一致 */
-    var nx = FRUITS[S.pending];
+    /* 掉落的同时把下一颗直接拿到手上，整个队列往前挪一格：
+     *     手上   ← 「下一个」显示的那颗
+     *     「下一个」 ← 备胎
+     *     备胎   ← 新抽一颗
+     *
+     * 所以 chip 上画的那颗，就是你**落下手上这颗之后立刻会拿到**的那颗（不是再下一颗）。
+     * 之前是把备胎直接塞进手上、chip 却换成新抽的，等于显示的东西要隔一次才轮到 —— 
+     * 看起来就是「下一个」老是慢一拍。 */
+    var nx = FRUITS[S.nextLevel];
     var nr = nx.radius * (nx.spriteScale || 1);
     S.current = {
-      level: S.pending,
+      level: S.nextLevel,
       x: clamp(S.pointerX, WALL + nr, W - WALL - nr),
       born: S.time
     };
-    S.pending = S.nextLevel;
-    S.nextLevel = nextSpawnLevel();
+    S.nextLevel = S.backup;
+    S.backup = nextSpawnLevel();
     updateNextChip();
   }
 
