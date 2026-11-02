@@ -35,26 +35,29 @@ var GAME_CONFIG = {
 
   /* ---------------------------- 物理 ---------------------------- */
   physics: {
-    gravity: 1.0,           // 重力，越大掉得越快
-    restitution: 0.2,      // 弹性，0 = 完全不弹
-    friction: 0.18,         // 摩擦，越大越不容易滑动
-    frictionStatic: 0.55,   // 静摩擦
-    frictionAir: 0.003,     // 空气阻力，让果子轻微“发闷”
-    slop: 0.05,             // 允许的穿透量，太小会「弹开」而不是「挤在一起」
-    maxSpeed: 22,           // 速度上限(px/帧)，防止偶发穿墙
-    positionIterations: 12, // 位置迭代，越高堆叠越稳（性能换稳定）
-    velocityIterations: 8,
-    constraintIterations: 2
+    gravity: 2400,          // 重力加速度（px/s²），越大掉得越快
+    substeps: 3,            // 每帧物理子步：越多越不容易穿模
+    iterations: 6,          // 每个子步的约束迭代次数：越高堆叠越稳（性能换稳定）
+    restitution: 0.30,      // 果子之间的弹性，0 = 完全不弹
+    wallRestitution: 0.38,  // 撞墙 / 撞地的弹性
+    restThreshold: 70,      // 撞击速度低于它就不反弹（堆叠才不会一直抖）
+    friction: 0.955,        // 接触时的摩擦，越大越不容易滑
+    mergePad: 1.0,          // 合成判定容差(px)：贴到这么近就算「撞上了」
+    maxSpeed: 1500,         // 速度上限(px/s)，防止极快的小果子从大果子身上钻过去
+    upright: 0              // 停稳后自动扶正的力度：0 = 完全自由翻滚（可以倒立停住），
+                            // 数值越大站直得越快；只在几乎不动时生效，翻滚过程不受影响
   },
 
   /* ---------------------------- 规则 ---------------------------- */
   rules: {
     spawnLevels: 5,                     // 只有前 N 级会掉落
-    spawnWeights: [3.0, 2.8, 2.4, 1.9, 1.4], // 各等级出现权重
+    spawnWeights: [3.0, 2.8, 2.4, 1.3, 0.9], // 各等级出现权重
+    spawnUnlock: true,                  // 掉落等级"靠合成解锁"：没合出来过的等级不会掉
+    spawnBaseLevels: 3,                 // 开局就能掉落前几级（3 = 只掉 1~3 级，4、5 级要先合出来）
     firstLevel: 0,                      // 开局第一颗固定为第几级（0 = 最低级）
     maxRepeat: 2,                       // 同一级最多连着出几次（2 = 不会出现三连）
     dropCooldown: 340,                  // 两次投放的最短间隔(ms)
-    dangerDwell: 1300,                  // 越过死亡线坚持多久算输(ms)
+    dangerDwell: 1800,                  // 越过死亡线坚持多久算输(ms)
     comboWindow: 700,                   // 连击判定窗口(ms)
     comboStep: 0.2,                     // 每层连击的加成
     comboMax: 1.0,                      // 连击加成上限（1.0 = 最高 +100%）
@@ -64,12 +67,14 @@ var GAME_CONFIG = {
   /* ---------------------------- 水果 ---------------------------- */
   /*
    *  name          显示名称
-   *  radius        碰撞半径（圆形碰撞体，世界坐标）
+   *  radius        尺寸基准：素材（裁掉透明边后）最长边 = 2×radius×spriteScale
    *  score         合成出这一级时得到的分数
    *  color/color2  没有素材时的兜底渐变色
    *  sprite        素材路径，留空 '' 则画一个圆形色块
-   *  spriteScale   视觉缩放，相对碰撞直径；非圆形素材可以用它调大小
-   *  spriteOffsetY 视觉上下偏移，单位是「半径」，正数向下（叶子/果蒂类素材好用）
+   *  spriteScale   整体缩放（图形和碰撞体一起放大），默认值就贴合
+   *  spriteOffsetY 视觉上下偏移，单位是「半径」，正数向下。
+   *                注意：碰撞体现在是精确贴着素材轮廓的，任何偏移都会让画面和
+   *                碰撞体错开（负数=悬空，正数=穿模），所以默认全部保持 0。
    *  rotate        是否跟随物理旋转（有明确朝向的素材可以设 false）
    */
   fruits: [
@@ -78,11 +83,11 @@ var GAME_CONFIG = {
     { name: '奶鼠',   radius: 26, score: 5,  color: '#ff9a1f', color2: '#dd6a00', sprite: 'assets/fruits/03-mice.webp',    spriteScale: 1.05, spriteOffsetY: 0,    rotate: true  },
     { name: '奶鸡',   radius: 35, score: 9,  color: '#ffe14d', color2: '#e0af00', sprite: 'assets/fruits/04-chicken.webp',     spriteScale: 1.08, spriteOffsetY: 0,    rotate: 0.4  },
     { name: '奶狗', radius: 45, score: 14, color: '#a6d94f', color2: '#6b4220', sprite: 'assets/fruits/05-dog.webp',      spriteScale: 1.00, spriteOffsetY: 0,    rotate: true  },
-    { name: '奶猪',   radius: 60, score: 20, color: '#ec3b2f', color2: '#b31b12', sprite: 'assets/fruits/06-pig.webp',    spriteScale: 1.08, spriteOffsetY: -0.02, rotate: 0.4 },
+    { name: '奶猪',   radius: 60, score: 20, color: '#ec3b2f', color2: '#b31b12', sprite: 'assets/fruits/06-pig.webp',    spriteScale: 1.08, spriteOffsetY: 0, rotate: 0.4 },
     { name: '奶马', radius: 67, score: 28, color: '#ff9f8c', color2: '#d43a52', sprite: 'assets/fruits/07-horse.webp',     spriteScale: 1.08, spriteOffsetY: 0,    rotate: 0.4  },
-    { name: '奶嘟嘟',   radius: 85, score: 38, color: '#f6b93b', color2: '#c98211', sprite: 'assets/fruits/08-kangaroo.webp', spriteScale: 1.06, spriteOffsetY: 0.05, rotate: 0.4  },
+    { name: '奶嘟嘟',   radius: 85, score: 38, color: '#f6b93b', color2: '#c98211', sprite: 'assets/fruits/08-kangaroo.webp', spriteScale: 1.06, spriteOffsetY: 0, rotate: 0.4  },
     { name: '奶龙',   radius: 100, score: 50, color: '#8b5a30', color2: '#5d3a1c', sprite: 'assets/fruits/09-long.webp',   spriteScale: 1.00, spriteOffsetY: 0,    rotate: true  },
-    { name: '川', radius: 13, score: 65, color: '#ff5a6e', color2: '#2f8b3f', sprite: 'assets/fruits/10-scu.webp', spriteScale: 1.02, spriteOffsetY: 0.1, rotate: true }
+    { name: '川', radius: 13, score: 65, color: '#ff5a6e', color2: '#2f8b3f', sprite: 'assets/fruits/10-scu.webp', spriteScale: 1.02, spriteOffsetY: 0, rotate: true }
   ]
 };
 

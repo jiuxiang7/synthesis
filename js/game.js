@@ -11,7 +11,7 @@
   /* ============================ 1. 常量 ============================ */
 
   var CFG     = window.GAME_CONFIG;
-  var M       = window.Matter;
+  var PK      = window.PhysicsKit;
   var W       = CFG.world.width;
   var H       = CFG.world.height;
   var WALL    = CFG.world.wall;
@@ -22,7 +22,12 @@
   var PHYS    = CFG.physics;
   var MAX_LV  = FRUITS.length - 1;
   var STEP    = 1000 / 60;
-  var DEBUG   = /[?&]debug\b/.test(location.search);   // ?debug=1 显示碰撞圆，调素材时用
+  var DEBUG   = /[?&]debug\b/.test(location.search);   // ?debug=1 显示碰撞体，调素材时用
+
+  /* 合成出来的果子会"弹"一下 —— 纯视觉，碰撞体一出生就是全尺寸。
+   * 这一点和之前的做法正好相反：之前靠缩放碰撞体来演动画，动画那 0.26 秒里
+   * 画面和碰撞一直对不上，才会出现"看着没碰却顶着"的怪事。 */
+  var POP_MS = 170;
 
   /* ---------------------------- DOM ---------------------------- */
 
@@ -72,6 +77,7 @@
     dragging: false,
     pointerX: W / 2,
     combo: 0,
+    maxMerged: 0,         // 本局靠合成做到过的最高等级（决定哪些等级可以掉落）
     lastMergeAt: -9999,
     danger: 0,
     shake: 0
@@ -86,240 +92,66 @@
 
   /* ============================ 2. 物理世界 ============================ */
 
-  var engine = M.Engine.create({
-    positionIterations: PHYS.positionIterations,
-    velocityIterations: PHYS.velocityIterations,
-    constraintIterations: PHYS.constraintIterations
+  var world = PK.create({
+    width: W,
+    height: H,
+    wall: WALL,
+    gravity: PHYS.gravity,
+    substeps: PHYS.substeps,
+    iterations: PHYS.iterations,
+    restitution: PHYS.restitution,
+    wallRestitution: PHYS.wallRestitution,
+    friction: PHYS.friction,
+    restThreshold: PHYS.restThreshold,
+    mergePad: PHYS.mergePad,
+    maxSpeed: PHYS.maxSpeed,
+    upright: PHYS.upright
   });
-  engine.gravity.x = 0;
-  engine.gravity.y = PHYS.gravity;
-  engine.gravity.scale = 0.001;
 
-  var world = engine.world;
+  /* 引擎原地增删，这里拿的是同一个数组，不用每帧同步 */
+  var fruits = world.balls;
 
-  // 碰撞体做得非常厚：视觉上只有 12px 的壁，但物理上是实心大块，
-  // 这样即使果子被高速弹出也不会“穿墙逃跑”（12px 薄壁会被 17px/帧 的速度打穿）。
-  //
-  // 关键：碰撞面向内缩进一个 WALL，让出一圈正好是「墙体本身」的位置。
-  // 否则果子会挨在 0 / W / H 上，被盖在上面的墙体视觉压掉 12px。
-  var THICK = 400;
-  var walls = [
-    M.Bodies.rectangle(WALL - THICK / 2, H / 2, THICK, H * 2, { isStatic: true, friction: 0.5, restitution: 0 }),
-    M.Bodies.rectangle(W - WALL + THICK / 2, H / 2, THICK, H * 2, { isStatic: true, friction: 0.5, restitution: 0 }),
-    M.Bodies.rectangle(W / 2, H - WALL + THICK / 2, W + THICK * 2, THICK, { isStatic: true, friction: 0.6, restitution: 0 })
-  ];
-  M.Composite.add(world, walls);
+  /* 把素材形状交给引擎。必须在素材全部加载完之后调用一次：
+   * 形状是「沿轮廓铺的一圈内切小圆」，由 tools/build-meta.py 离线算好。 */
+  function applyShapes() {
+    var shapes = [], radii = [];
+    for (var i = 0; i < FRUITS.length; i++) {
+      var info = sprites[i];
+      var r = FRUITS[i].radius * (FRUITS[i].spriteScale || 1);
+      var cs = info && info.shape && info.shape.circles;
+      radii.push(r);
 
-  function addFruit(level, x, y, vx, vy, merged) {
-    var f = FRUITS[level];
-    var info = sprites[level];
-    var shape = info && info.shape;
-    var d = f.radius * 2 * (f.spriteScale || 1);
-
-    var opts = {
-      label: 'fruit',
-      restitution: PHYS.restitution,
-      friction: PHYS.friction,
-      frictionStatic: PHYS.frictionStatic,
-      frictionAir: PHYS.frictionAir,
-      density: 0.0012,
-      slop: PHYS.slop
-    };
-
-    var body;
-    if (shape && shape.circles && shape.circles.length > 1) {
-      /* 异形素材：用多个圆拼出贴近轮廓的复合刚体 */
-      var parts = [];
-      for (var k = 0; k < shape.circles.length; k++) {
-        var c = shape.circles[k];
-        parts.push(M.Bodies.circle(x + c.x * d, y + c.y * d, c.r * d, opts));
+      if (cs && cs.length) {
+        var parts = [];
+        for (var k = 0; k < cs.length; k++) {
+          var c = cs[k];
+          parts.push(Array.isArray(c) ? [c[0], c[1], c[2]] : [c.x, c.y, c.r]);
+        }
+        shapes.push({ parts: parts, rb: info.shape.rb || 1.06 });
+      } else {
+        shapes.push({ parts: [[0, 0, 1]], rb: 1 });   // 没数据：退化成单个圆
       }
-      body = M.Body.create({
-        parts: parts,
-        label: 'fruit',
-        friction: PHYS.friction,
-        frictionStatic: PHYS.frictionStatic,
-        frictionAir: PHYS.frictionAir,
-        restitution: PHYS.restitution
-      });
-    } else {
-      body = M.Bodies.circle(x, y, f.radius, opts);
     }
-
-    body.plugin = {
-      level: level,
-      born: S.time,
-      animated: !!merged,
-      dead: false,
-      /* 复合刚体的 position 是质心，精灵要画在几何中心上，这里记下偏移 */
-      com: (shape && shape.circles && shape.circles.length > 1)
-        ? { x: body.position.x - x, y: body.position.y - y }
-        : null
-    };
-
-    M.Body.setVelocity(body, { x: vx || 0, y: vy || 0 });
-    if (merged) M.Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.12);
-    M.Composite.add(world, body);
-    fruits.push(body);
-    return body;
+    world.setTiers(shapes, radii);
   }
 
-  function removeFruit(body) {
-    var i = fruits.indexOf(body);
-    if (i >= 0) fruits.splice(i, 1);
-    M.Composite.remove(world, body);
+  /* 放一颗果子。位置、速度、质量都由引擎管，游戏这边不保存副本。 */
+  function addFruit(level, x, y, vx, vy) {
+    return world.add(level, x, y, vx, vy);
   }
 
   /* ============================ 3. 合成逻辑 ============================ */
 
-  /** 速度兜底：极端情况下（多个大果子同时挤压）限速，避免穿透与“飞出去” */
-  function clampSpeeds() {
-    var max = PHYS.maxSpeed;
-    if (!max) return;
-    for (var i = 0; i < fruits.length; i++) {
-      var b = fruits[i];
-      if (b.speed > max) {
-        var k = max / b.speed;
-        M.Body.setVelocity(b, { x: b.velocity.x * k, y: b.velocity.y * k });
-      }
-    }
-  }
-
-  /* 合成出来的果子比原来两颗都大，经常直接把旁边的小果子"吞"进身体里。
-   * 而被吞的小果子如果正好陷在腿间这种凹槽里，四周都是碰撞圆、受力对称，
-   * 求解器永远推不出来 —— 会一直保持十几像素的穿透挂在画面上。
-   * 所以合成后主动做一次分离：把和新果子重叠的其他果子沿连线推到体外。 */
-  function separateOverlaps(nb) {
-    var nbParts = nb.parts.filter(function (p) { return p.circleRadius; });
-    for (var pass = 0; pass < 2; pass++) {
-      var moved = false;
-      for (var i = 0; i < fruits.length; i++) {
-        var o = fruits[i];
-        if (o === nb || o.plugin.dead) continue;
-        var oParts = o.parts.filter(function (p) { return p.circleRadius; });
-        var deepest = 0, dirx = 0, diry = -1;
-        for (var a = 0; a < nbParts.length; a++) {
-          for (var b = 0; b < oParts.length; b++) {
-            var pa = nbParts[a], pb = oParts[b];
-            var dx = pb.position.x - pa.position.x;
-            var dy = pb.position.y - pa.position.y;
-            var dist = Math.sqrt(dx * dx + dy * dy) || 0.001;
-            var d = pa.circleRadius + pb.circleRadius - dist;   // >0 就是重叠
-            if (d > deepest) { deepest = d; dirx = dx / dist; diry = dy / dist; }
-          }
-        }
-        if (deepest > 2) {
-          /* 沿"从新果子指向它"的方向推出去；正好同心就往上推 */
-          if (!dirx && !diry) { dirx = 0; diry = -1; }
-          M.Body.translate(o, { x: dirx * (deepest + 2), y: diry * (deepest + 2) });
-          /* 别把它推到墙外面去 */
-          var bb = o.bounds, fx = 0, fy = 0;
-          if (bb.min.x < WALL) fx = WALL - bb.min.x;
-          else if (bb.max.x > W - WALL) fx = (W - WALL) - bb.max.x;
-          if (bb.max.y > H - WALL) fy = (H - WALL) - bb.max.y;
-          if (fx || fy) M.Body.translate(o, { x: fx, y: fy });
-          moved = true;
-        }
-      }
-      if (!moved) break;
-    }
-  }
-
-  /* 静止冻结：全场都挪不动了就干脆不跑物理，一有动静立刻恢复。
-   * 比 Matter 的单体休眠可靠 —— 单体休眠在「支撑它的果子被合成掉 / 自己滚走」之后
-   * 不会自己醒，会原地冻结在半空，看起来就是"悬空"。整场冻结不存在这个问题。 */
-  var frozen = false;
-  var quietFrames = 0;
-
-  function sceneIsQuiet() {
-    for (var i = 0; i < fruits.length; i++) {
-      var b = fruits[i];
-      if (b.plugin.dead) continue;
-      if (b.speed > 0.2 || Math.abs(b.angularVelocity) > 0.02) return false;
-      /* 有果子探到死亡线附近时不许冻结：危险计时得继续走，压线的东西也该继续塌 */
-      if (b.bounds.min.y < DEATH_Y + 24) return false;
-    }
-    return true;
-  }
-
-  var frozenTick = 0;
-
-  /* 有没有「悬空」的果子：冻结时直接查物理引擎的接触对。
-   * 一个果子只要贴着任何东西（别的果子、地面、器壁），就一定在 engine.pairs 里；
-   * 一个接触对都没有、又不在底部，那就是悬空的。比包围盒判断准得多。 */
-  function hasSuspended() {
-    var pairs = engine.pairs.list, touching = {}, i, p;
-    for (i = 0; i < pairs.length; i++) {
-      p = pairs[i];
-      if (!p.isActive) continue;
-      touching[(p.bodyA.parent || p.bodyA).id] = 1;
-      touching[(p.bodyB.parent || p.bodyB).id] = 1;
-    }
-    for (i = 0; i < fruits.length; i++) {
-      var b = fruits[i];
-      if (b.plugin.dead) continue;
-      if (!touching[b.id]) return true;
-    }
-    return false;
-  }
-
-  /* 有任何东西被投放 / 合成 / 重置都要调用它，把物理唤醒。
-   * wakeUntil：合成/落地之后至少再跑 0.8 秒物理，留出时间把重叠推开。
-   * 否则"速度已经很低但还压着"的瞬间会被冻结，穿透就永久留在画面上了。 */
-  var wakeUntil = 0;
-  function thaw() {
-    frozen = false;
-    quietFrames = 0;
-    wakeUntil = S.time + 800;
-  }
-
-  /* 合成判定改成「真的撞上了才算」——复合刚体的形状千奇百怪，
-   * 用圆心距离没法判断，直接听物理引擎的碰撞事件最准。 */
-  var pendingMerges = [];
-  var mgStats = { pairs: 0, merged: 0, skipped: 0 };
-
-  function onCollisionStart(evt) {
-    var pairs = evt.pairs;
-    for (var i = 0; i < pairs.length; i++) {
-      /* 复合刚体的碰撞对给的是子圆，要回溯到整体刚体 */
-      var a = pairs[i].bodyA.parent || pairs[i].bodyA;
-      var b = pairs[i].bodyB.parent || pairs[i].bodyB;
-      if (a === b) continue;
-      if (a.label !== 'fruit' || b.label !== 'fruit') continue;
-      if (a.plugin.dead || b.plugin.dead) continue;
-      if (a.plugin.level !== b.plugin.level) continue;
-      mgStats.pairs++;
-      pendingMerges.push([a, b]);
-    }
-  }
-  M.Events.on(engine, 'collisionStart', onCollisionStart);
-
-  function processMerges() {
-    if (!pendingMerges.length) return;
-    var list = pendingMerges;
-    pendingMerges = [];
-    for (var i = 0; i < list.length; i++) {
-      var a = list[i][0], b = list[i][1];
-      if (a.plugin.dead || b.plugin.dead) { mgStats.skipped++; continue; }
-      if (fruits.indexOf(a) < 0 || fruits.indexOf(b) < 0) { mgStats.skipped++; continue; }
-      a.plugin.dead = true;
-      b.plugin.dead = true;
-      mgStats.merged++;
-      doMerge(a, b);
-    }
-  }
-
-  function doMerge(a, b) {
-    var level = a.plugin.level;
-    var next  = level + 1;
-    var mx = (a.position.x + b.position.x) / 2;
-    var my = (a.position.y + b.position.y) / 2;
-    var vx = (a.velocity.x + b.velocity.x) * 0.5;
-    var vy = (a.velocity.y + b.velocity.y) * 0.5;
-
-    thaw();
-    removeFruit(a);
-    removeFruit(b);
+  /* 引擎报上来的合成：位置已经定好（两颗的中点），下一级也已经按全尺寸建好，
+   * 这里只负责分数、特效、音效。
+   *
+   * 这里**没有**"把旁边的果子挤开"这一步：位置约束在同一个子步里就把重叠
+   * 推干净了，而且新果子质量大（质量 ∝ 半径²），被推开的几乎总是旁边小的那颗，
+   * 所以合成点天然被保住。 */
+  function onMerge(ev) {
+    var level = ev.level;
+    var finished = ev.next < 0;
+    var mx = ev.x, my = ev.y;
 
     /* --- 连击 --- */
     var chained = (S.time - S.lastMergeAt) < RULES.comboWindow;
@@ -327,9 +159,16 @@
     S.lastMergeAt = S.time;
     var mult = 1 + Math.min((S.combo - 1) * RULES.comboStep, RULES.comboMax);
 
+    /* --- 掉落解锁：合出这一级之后，下一级才进入掉落池 --- */
+    if (ev.next >= 0 && ev.next > S.maxMerged) {
+      var wasN = dropPoolSize();
+      S.maxMerged = ev.next;
+      var nowN = dropPoolSize();
+      if (nowN > wasN) floatingText(W / 2, DEATH_Y + 38, '掉落解锁 ' + nowN + ' 级', false);
+    }
+
     /* --- 计分 --- */
-    var finished = next > MAX_LV;
-    var base = finished ? FRUITS[MAX_LV].score * 2 : FRUITS[next].score;
+    var base = finished ? FRUITS[MAX_LV].score * 2 : FRUITS[ev.next].score;
     var gain = Math.round(base * mult);
     addScore(gain);
 
@@ -339,26 +178,22 @@
     showCombo(mult);
 
     if (!finished) {
-      var nb = addFruit(next, mx, my, vx * 0.55, vy * 0.55 - 0.4, true);
-      nb.plugin.animated = true;
-      thaw();
-      separateOverlaps(nb);
       S.shake = Math.min(S.shake + 1.1 + level * 0.3, 11);
-      sfx.merge(next);
+      sfx.merge(ev.next);
       vibrate(level >= 6 ? 18 : 9);
-    } else {
-      /* --- 轮回：两个满级果子相撞，按 rules.recycle 变回某个低级果子 --- */
-      S.shake = 13;
-      bigBurst(mx, my);
-      sfx.win();
-      vibrate([20, 40, 20]);
+      return;
+    }
 
-      var backTo = (typeof RULES.recycle === 'number') ? RULES.recycle : 0;
-      if (backTo >= 0 && backTo <= MAX_LV) {
-        var reborn = addFruit(backTo, mx, my, vx * 0.3, vy * 0.3 - 1.8, true);
-        reborn.plugin.animated = true;
-        rings.push({ x: mx, y: my, r: FRUITS[MAX_LV].radius * 0.7, life: 0, max: 640, color: '#ffcf5c' });
-      }
+    /* --- 轮回：两个满级果子相撞，按 rules.recycle 变回某个低级果子 --- */
+    S.shake = 13;
+    bigBurst(mx, my);
+    sfx.win();
+    vibrate([20, 40, 20]);
+
+    var backTo = (typeof RULES.recycle === 'number') ? RULES.recycle : 0;
+    if (backTo >= 0 && backTo <= MAX_LV) {
+      world.add(backTo, mx, my, 0, -120);
+      rings.push({ x: mx, y: my, r: FRUITS[MAX_LV].radius * 0.7, life: 0, max: 640, color: '#ffcf5c' });
     }
   }
 
@@ -384,9 +219,23 @@
   var spawnSeq = [];      // 最近生成过的等级，用来避免同一种连着出
 
   /** 抽下一颗的等级：若已经连着出了 maxRepeat 次同一级，本次把这个等级排除掉 */
+  /* 本局当前可以掉落的等级数（前 n 级）。
+   *
+   * 规则「靠合成解锁」：开局只掉前 spawnBaseLevels 级；合出第 k 级之后，
+   * 第 k+1 级才会进入掉落池。也就是——没合到过的等级，不会白白掉给你。
+   * 这样前期不会被高等级果子"喂"到，节奏完全靠自己合出来。 */
+  function dropPoolSize() {
+    var n = Math.min(RULES.spawnLevels, RULES.spawnWeights.length, FRUITS.length);
+    if (RULES.spawnUnlock !== false) {
+      var base = Math.max(1, Math.min(RULES.spawnBaseLevels || 3, n));
+      n = Math.min(n, Math.max(base, S.maxMerged + 1));
+    }
+    return n;
+  }
+
   function randLevel() {
     var w = RULES.spawnWeights;
-    var n = Math.min(RULES.spawnLevels, w.length, FRUITS.length);
+    var n = dropPoolSize();
     var rep = (typeof RULES.maxRepeat === 'number') ? RULES.maxRepeat : 2;
 
     var ban = -1;
@@ -425,15 +274,14 @@
   }
 
   function resetGame() {
-    thaw();
-    fruits.slice().forEach(removeFruit);
-    fruits.length = 0;
+    world.reset();
     particles.length = 0;
     rings.length = 0;
     texts.length = 0;
 
     S.score = 0;
     S.combo = 0;
+    S.maxMerged = 0;
     S.lastMergeAt = -9999;
     S.danger = 0;
     S.shake = 0;
@@ -501,11 +349,11 @@
   /* ---------------------------- 投放 ---------------------------- */
 
   function dropCurrent() {
-    thaw();
     if (S.mode !== 'playing' || !S.current || S.cooldown > 0) return;
     var f = FRUITS[S.current.level];
-    var x = clamp(S.current.x, WALL + f.radius, W - WALL - f.radius);
-    addFruit(S.current.level, x, DROP_Y, 0, 1.4, false);
+    var r = f.radius * (f.spriteScale || 1);
+    var x = clamp(S.current.x, WALL + r, W - WALL - r);
+    addFruit(S.current.level, x, DROP_Y, 0, 120);
     sfx.drop();
     S.current = null;
     S.cooldown = RULES.dropCooldown;
@@ -513,7 +361,8 @@
 
   function spawnNext() {
     var f = FRUITS[S.nextLevel];
-    var x = clamp(S.pointerX, WALL + f.radius, W - WALL - f.radius);
+    var r = f.radius * (f.spriteScale || 1);
+    var x = clamp(S.pointerX, WALL + r, W - WALL - r);
     S.current = { level: S.nextLevel, x: x, born: S.time };
     S.nextLevel = nextSpawnLevel();
     updateNextChip();
@@ -525,9 +374,10 @@
     var over = false;
     for (var i = 0; i < fruits.length; i++) {
       var b = fruits[i];
-      if (S.time - b.plugin.born < 1200) continue;   // 刚掉下来的不算
-      if (b.speed > 1.1) continue;                   // 还在动的也不算
-      if (b.bounds.min.y < DEATH_Y) { over = true; break; }
+      if (world.time - b.bornAt < 1200) continue;        // 刚掉下来的不算
+      var sp = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+      if (sp > 70) continue;                             // 还在动的也不算（px/s）
+      if (b.y - b.r < DEATH_Y) { over = true; break; }
     }
     if (over) {
       S.danger += dt;
@@ -590,11 +440,11 @@
 
     loadingEl.classList.add('hidden');
     if (!S.assetsReady) {
+      applyShapes();                     // 素材齐了才能把形状交给物理
       S.assetsReady = true;
       S.loadMs = Math.round(performance.now() - loadState.t0);
       if (DEBUG) console.info('[载入] 可开始游戏用时 ' + S.loadMs + 'ms');
       setTimeout(collectTiming, 0);
-      thaw();
     }
   }
 
@@ -747,181 +597,20 @@
     var w2 = box.w * s, h2 = box.h * s;
     og.drawImage(probe, box.x, box.y, box.w, box.h, (SZ - w2) / 2, (SZ - h2) / 2, w2, h2);
 
+    /* 碰撞形状：优先用预计算好的「沿轮廓的小圆」。
+     * 没数据（换了素材又没重跑 tools/build-meta.py）就退化成单个圆 ——
+     * 会有点误差，但不会崩，也不会像以前那样在运行时算出个更大的怪形状。 */
     var shape = null;
-    if (meta && meta.circles) {
-      /* assets-meta.js 里存的是 [x, y, r] 紧凑数组，这里统一成对象 */
+    if (meta && meta.circles && meta.circles.length) {
       var cs = [];
       for (var ci = 0; ci < meta.circles.length; ci++) {
         var cc = meta.circles[ci];
-        cs.push(Array.isArray(cc)
-          ? { x: cc[0], y: cc[1], r: cc[2] }
-          : { x: cc.x, y: cc.y, r: cc.r });
+        cs.push(Array.isArray(cc) ? [cc[0], cc[1], cc[2]] : [cc.x, cc.y, cc.r]);
       }
-      shape = { circles: cs, cover: meta.cover, preset: true };
-    } else {
-      shape = fitShape(out);
+      shape = { circles: cs, rb: meta.rb || 1.05 };
     }
 
     return { canvas: out, shape: shape, box: box };
-  }
-
-  /* ------------------------------------------------------------------
-   *  按图形轮廓拟合碰撞体
-   *  ------------------------------------------------------------------
-   *  圆对异形素材是硬伤：四条腿的马、趴着的猪，圆形要么盖到邻居身上（穿模），
-   *  要么留一大块空当（间隙）。这里直接在素材轮廓上「铺内切圆」：
-   *    1) 对 alpha 做距离变换，得到每个实心点到边缘的距离
-   *    2) 贪心：每次挑「还没被覆盖、且最厚」的点，放一个圆（半径=厚度×微膨胀）
-   *    3) 重复到圆数上限或图形被覆盖得差不多
-   *  得到的多个圆组成复合刚体，碰撞就贴着图形走了。
-   *  坐标系：圆心/半径都归一化到「精灵边长=1」，画的时候乘以实际绘制尺寸即可。
-   * ------------------------------------------------------------------ */
-  function fitShape(src) {
-    var SZ = 192;
-    var px = document.createElement('canvas');
-    px.width = px.height = SZ;
-    var pg = px.getContext('2d');
-    pg.drawImage(src, 0, 0, SZ, SZ);
-
-    var data;
-    try {
-      data = pg.getImageData(0, 0, SZ, SZ).data;
-    } catch (e) {
-      return null;                       // file:// 读不到像素 → 退回单圆
-    }
-
-    var N = SZ * SZ;
-    var mask = new Uint8Array(N);
-    var area = 0, x0 = SZ, y0 = SZ, x1 = -1, y1 = -1;
-    for (var i = 0; i < N; i++) {
-      if (data[i * 4 + 3] > 24) {
-        mask[i] = 1; area++;
-        var mx = i % SZ, my = (i / SZ) | 0;
-        if (mx < x0) x0 = mx;
-        if (mx > x1) x1 = mx;
-        if (my < y0) y0 = my;
-        if (my > y1) y1 = my;
-      }
-    }
-    if (!area) return null;
-
-    /* 素材裁完边正好贴满画布，最外一圈像素的"外面"不在网格里。
-     * 距离变换看不到这层背景，会误以为边缘离背景很远，于是在边上铺出半径过大的圆，
-     * 整个碰撞体比图形大一圈（别的果子落在看不见的圆上 → 看起来悬空）。
-     * 把边框一圈视为背景即可。 */
-    for (var bx = 0; bx < SZ; bx++) {
-      mask[bx] = 0;
-      mask[(SZ - 1) * SZ + bx] = 0;
-      mask[bx * SZ] = 0;
-      mask[bx * SZ + SZ - 1] = 0;
-    }
-
-    var bw = x1 - x0 + 1, bh = y1 - y0 + 1;
-    var fill = area / (bw * bh);
-
-    /* 注意：这里**故意不再**用「面积占比」提前判定"圆素材、直接用单圆"。
-     * 狗这种圆乎乎的造型也能占到包围盒 73%，按占比判圆会用一个直径等于包围盒的大圆兜住，
-     * 身体比圆小一圈 → 别的果子落在看不见的圆上，看着就是"悬空"。
-     * 真正的圆在这个贪心算法下本来就会只铺出 1 个圆（第一圈就全覆盖），
-     * 所以交给拟合判断更可靠。 */
-
-    /* --- 距离变换（两趟倒角） --- */
-    var INF = 1e6, A = 1, B = 1.4142;
-    var dt = new Float32Array(N);
-    for (i = 0; i < N; i++) dt[i] = mask[i] ? INF : 0;
-
-    for (var y = 0; y < SZ; y++) {
-      for (var x = 0; x < SZ; x++) {
-        i = y * SZ + x;
-        if (!mask[i]) continue;
-        var v = dt[i];
-        if (x > 0) v = Math.min(v, dt[i - 1] + A);
-        if (y > 0) v = Math.min(v, dt[i - SZ] + A);
-        if (x > 0 && y > 0) v = Math.min(v, dt[i - SZ - 1] + B);
-        if (x < SZ - 1 && y > 0) v = Math.min(v, dt[i - SZ + 1] + B);
-        dt[i] = v;
-      }
-    }
-    for (y = SZ - 1; y >= 0; y--) {
-      for (x = SZ - 1; x >= 0; x--) {
-        i = y * SZ + x;
-        if (!mask[i]) continue;
-        var v2 = dt[i];
-        if (x < SZ - 1) v2 = Math.min(v2, dt[i + 1] + A);
-        if (y < SZ - 1) v2 = Math.min(v2, dt[i + SZ] + A);
-        if (x < SZ - 1 && y < SZ - 1) v2 = Math.min(v2, dt[i + SZ + 1] + B);
-        if (x > 0 && y < SZ - 1) v2 = Math.min(v2, dt[i + SZ - 1] + B);
-        dt[i] = v2;
-      }
-    }
-
-    /* --- 贪心铺圆 --- */
-    var covered = new Uint8Array(N);
-    var circles = [];
-    /* 圆半径 = 该处内切半径 + 固定外扩量。
-     * 用「固定量」而不是「按比例放大」：并集在轮廓边缘本来会内缩一点点（相邻圆之间塌腰），
-     * 补一个固定外扩正好抵掉，超出的部分始终只有 ~1.5% 素材宽度（≈2 世界像素），肉眼看不出来。
-     * 按比例放大的话，粗的地方会鼓出去一大圈，反而在相邻果子之间撑出空隙。 */
-    var MARGIN = SZ * 0.012, MAXN = 26, MINR = SZ * 0.009;
-
-    function markCovered(cx, cy, r) {
-      var r2 = r * r;
-      var ys = Math.max(0, Math.floor(cy - r)), ye = Math.min(SZ - 1, Math.ceil(cy + r));
-      var xs = Math.max(0, Math.floor(cx - r)), xe = Math.min(SZ - 1, Math.ceil(cx + r));
-      for (var yy = ys; yy <= ye; yy++) {
-        for (var xx = xs; xx <= xe; xx++) {
-          var ddx = xx - cx, ddy = yy - cy;
-          if (ddx * ddx + ddy * ddy <= r2) covered[yy * SZ + xx] = 1;
-        }
-      }
-    }
-
-    for (var n = 0; n < MAXN; n++) {
-      var best = 0, bi = -1;
-      for (i = 0; i < N; i++) {
-        if (mask[i] && !covered[i] && dt[i] > best) { best = dt[i]; bi = i; }
-      }
-      if (bi < 0 || best < MINR) break;
-
-      var cx = bi % SZ, cy = (bi / SZ) | 0;
-      var r = best + MARGIN;
-      circles.push({ x: cx / SZ - 0.5, y: cy / SZ - 0.5, r: r / SZ });
-      markCovered(cx, cy, r);
-    }
-
-    /* --- 细节补圆：脚、耳朵、尾巴这类细突出物 ---
-     * 上面的循环按「厚度」优先，细结构永远排不上。这里专门扫没盖住的零碎区域，
-     * 补几个贴着实际粗细的小圆（不外扩），这样细部也有碰撞，且不会凭空撑出空隙。 */
-    var EXTRA = 4, DMIN = SZ * 0.075;
-    for (var e = 0; e < EXTRA; e++) {
-      var best2 = 0, bi2 = -1;
-      for (i = 0; i < N; i++) {
-        if (!mask[i] || covered[i] || dt[i] <= best2) continue;
-        var px2 = i % SZ, py2 = (i / SZ) | 0;
-        var tooClose = false;
-        for (var c2 = 0; c2 < circles.length; c2++) {
-          var ox = circles[c2].x * SZ + SZ / 2 - px2;
-          var oy = circles[c2].y * SZ + SZ / 2 - py2;
-          if (ox * ox + oy * oy < DMIN * DMIN) { tooClose = true; break; }
-        }
-        if (tooClose) continue;
-        best2 = dt[i]; bi2 = i;
-      }
-      if (bi2 < 0 || best2 < SZ * 0.007) break;
-
-      var ex = bi2 % SZ, ey = (bi2 / SZ) | 0;
-      var er = Math.max(best2 + MARGIN, SZ * 0.014);
-      circles.push({ x: ex / SZ - 0.5, y: ey / SZ - 0.5, r: er / SZ });
-      markCovered(ex, ey, er);
-    }
-
-    if (!circles.length) return null;
-
-    // 覆盖率（调试/调参用）
-    var coveredArea = 0;
-    for (i = 0; i < N; i++) if (mask[i] && covered[i]) coveredArea++;
-
-    return { circles: circles, fill: +fill.toFixed(1), cover: +(coveredArea / area).toFixed(2) };
   }
 
   /* ---------------------------- 绘制工具 ---------------------------- */
@@ -929,13 +618,6 @@
   function easeOutBack(t) {
     var c1 = 1.70158, c3 = c1 + 1;
     return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
-  }
-
-  function popScale(p) {
-    if (!p.animated) return 1;
-    var t = Math.min(1, (S.time - p.born) / 240);
-    var e = 1 - Math.pow(1 - t, 3);   // easeOutCubic：不会冲过头，避免一瞬间胀进邻居
-    return 0.62 + 0.38 * e;
   }
 
   function containerPath() {
@@ -1039,27 +721,28 @@
     ctx.restore();
   }
 
-  function drawFruit(f, x, y, angle, scale, sync) {
-    var r = f.radius * scale;
+  /* 画一颗果子。r 是屏幕上的半径（= 碰撞半径 × 弹出动画的比例），
+   * squash / sqA 是撞击时的挤压（纯视觉，最多 20% 出头）。
+   *
+   * 注意这里**不旋转**：碰撞体是一圈固定朝向的小圆，角色立着才和它对得上。
+   * 以前让精灵跟着物理角度转，马的腿能转到天上去，碰撞和画面却还是同一个角度 ——
+   * 看着更奇怪。 */
+  function drawFruit(f, x, y, r, squash, sqA, angle) {
     var sprite = sprites[FRUITS.indexOf(f)];
-    var d = r * 2 * (f.spriteScale || 1);
+    var d = r * 2;
 
     ctx.save();
     ctx.translate(x, y + (f.spriteOffsetY || 0) * r);
+    /* 画面角度 = 物理角度：碰撞小圆是跟着一起转的，所以转了也不会错位。 */
+    if (angle) ctx.rotate(angle);
+    if (squash > 0.002) {
+      ctx.rotate(sqA);
+      ctx.scale(1 - squash, 1 + squash * 0.55);
+      ctx.rotate(-sqA);
+    }
 
     if (sprite) {
-      ctx.save();
-      /* 贴形碰撞体（sync）必须和物理角度完全一致；
-         单圆果子可以用 rotate 做阻尼：0.4 = 只跟随 40%，永远翻不过来 */
-      if (sync) {
-        ctx.rotate(angle);
-      } else if (typeof f.rotate === 'number') {
-        if (f.rotate > 0) ctx.rotate(angle * Math.min(1, f.rotate));
-      } else if (f.rotate !== false) {
-        ctx.rotate(angle);
-      }
       ctx.drawImage(sprite.canvas, -d / 2, -d / 2, d, d);
-      ctx.restore();
     } else {
       var g = ctx.createRadialGradient(-r * 0.32, -r * 0.36, r * 0.1, 0, 0, r * 1.05);
       g.addColorStop(0, f.color);
@@ -1077,15 +760,13 @@
     ctx.restore();
   }
 
-  /* 复合刚体的 position 是质心，精灵要画在几何中心；把质心偏移按当前角度转回去 */
-  function spritePos(b) {
-    var c = b.plugin.com;
-    if (!c) return { x: b.position.x, y: b.position.y };
-    var ca = Math.cos(b.angle), sa = Math.sin(b.angle);
-    return {
-      x: b.position.x - (c.x * ca - c.y * sa),
-      y: b.position.y - (c.x * sa + c.y * ca)
-    };
+  /* 刚合成出来的果子"弹"一下：从 86% 长到 100%（纯画面，碰撞体一直是全尺寸） */
+  function popScale(b) {
+    if (!(b.popAt >= 0)) return 1;
+    var t = (world.time - b.popAt) / POP_MS;
+    if (t >= 1) { b.popAt = -1; return 1; }
+    var e = 1 - Math.pow(1 - t, 3);
+    return 0.86 + 0.14 * e;
   }
 
   /* 绘制顺序：大的先画、小的后画。
@@ -1095,15 +776,10 @@
   function drawFruits() {
     drawOrder.length = 0;
     for (var i = 0; i < fruits.length; i++) drawOrder.push(fruits[i]);
-    drawOrder.sort(function (a, b) {
-      return FRUITS[b.plugin.level].radius - FRUITS[a.plugin.level].radius;
-    });
+    drawOrder.sort(function (a, b) { return b.r - a.r; });
     for (var j = 0; j < drawOrder.length; j++) {
       var b = drawOrder[j];
-      var f = FRUITS[b.plugin.level];
-      var p = spritePos(b);
-      /* 贴形的复合碰撞体必须和画面同角度，否则碰撞和看到的位置会错开 */
-      drawFruit(f, p.x, p.y, b.angle, popScale(b.plugin), !!b.plugin.com);
+      drawFruit(FRUITS[b.tier], b.x, b.y, b.r * popScale(b), b.sq, b.sqA, b.angle);
     }
   }
 
@@ -1113,7 +789,7 @@
     var t = Math.min(1, (S.time - S.current.born) / 170);
     var drop = (1 - easeOutBack(t)) * 34;          // 从上方滑入
     var bob = Math.sin(S.time / 430) * 2.4;
-    drawFruit(f, S.current.x, DROP_Y - drop + bob, 0, 1);
+    drawFruit(f, S.current.x, DROP_Y - drop + bob, f.radius * (f.spriteScale || 1));
   }
 
   /* ---------------------------- 特效 ---------------------------- */
@@ -1286,7 +962,7 @@
     ctx.restore();
   }
 
-  /* 调素材用：显示每个果子的圆形碰撞体，方便对齐「图上大小」与「实际碰撞」 */
+  /* 调素材用：显示每个果子的碰撞体（凸块 / 圆），方便对齐「图上大小」与「实际碰撞」 */
   function drawDebugInfo() {
     if (!netInfo) return;
     ctx.save();
@@ -1311,17 +987,18 @@
     ctx.strokeStyle = 'rgba(232, 40, 120, 0.9)';
     for (var i = 0; i < fruits.length; i++) {
       var b = fruits[i];
-      var parts = b.parts.length > 1 ? b.parts.slice(1) : [b];
-      for (var k = 0; k < parts.length; k++) {
+      for (var k = 0; k < b.wx.length; k++) {
         ctx.beginPath();
-        ctx.arc(parts[k].position.x, parts[k].position.y, parts[k].circleRadius, 0, Math.PI * 2);
+        ctx.arc(b.wx[k], b.wy[k], b.ws[k], 0, Math.PI * 2);
         ctx.stroke();
       }
     }
     if (S.current) {
       ctx.strokeStyle = 'rgba(232, 40, 120, 0.45)';
+      var cf = FRUITS[S.current.level];
+      var cd = cf.radius * (cf.spriteScale || 1);
       ctx.beginPath();
-      ctx.arc(S.current.x, DROP_Y, FRUITS[S.current.level].radius, 0, Math.PI * 2);
+      ctx.arc(S.current.x, DROP_Y, cd, 0, Math.PI * 2);
       ctx.stroke();
     }
     ctx.restore();
@@ -1338,7 +1015,8 @@
     if (S.mode === 'playing') {
       if (S.current) {
         var f = FRUITS[S.current.level];
-        S.pointerX = clamp(S.pointerX, WALL + f.radius, W - WALL - f.radius);
+        var rr = f.radius * (f.spriteScale || 1);
+        S.pointerX = clamp(S.pointerX, WALL + rr, W - WALL - rr);
         S.current.x += (S.pointerX - S.current.x) * (1 - Math.exp(-dt / 55));
       } else if (S.cooldown > 0) {
         S.cooldown -= dt;
@@ -1346,30 +1024,18 @@
       }
     }
 
-    // 物理：固定步长，最多补 4 帧，避免掉帧后爆炸
+    /* 物理：固定步长，最多补 4 帧。引擎内部再分 3 个子步，
+     * 所以一帧最多 12 次约束迭代 —— 堆得再挤也推得动。 */
     acc += dt;
     var steps = 0;
-    if (frozen) {
-      acc = 0;
-      if (S.mode === 'playing') checkDanger(dt);   // 冻住也要继续判危险
-      /* 保险：冻结状态下如果有果子四周什么都没挨着，说明它是悬空的（不该发生），
-       * 立刻解冻让它掉下来。这条保证"冻结 ⇒ 一定有支撑"。 */
-      if ((++frozenTick % 20) === 0 && hasSuspended()) thaw();
-    } else {
-      while (acc >= STEP && steps < 4) {
-        M.Engine.update(engine, STEP);
-        clampSpeeds();
-        processMerges();
-        acc -= STEP;
-        steps++;
-        if (S.mode === 'playing') checkDanger(STEP);
-      }
-      if (steps === 4) acc = 0;
-      quietFrames = sceneIsQuiet() ? quietFrames + 1 : 0;
-      if (quietFrames > 30 && S.time > wakeUntil) frozen = true;   // 安静半秒且过了缓冲期才冻住
-                                                // 悬空的果子在重力下几帧内就会超过阈值，
-                                                // 所以"安静"本身就等价于"都踩实了"。
+    while (acc >= STEP && steps < 4) {
+      var merges = world.step(STEP / 1000);
+      for (var m = 0; m < merges.length; m++) onMerge(merges[m]);
+      acc -= STEP;
+      steps++;
+      if (S.mode === 'playing') checkDanger(STEP);
     }
+    if (steps === 4) acc = 0;
 
     updateEffects(dt);
     S.shake *= Math.pow(0.86, dt / 16.667);
@@ -1399,7 +1065,8 @@
   function pointerX(e) {
     if (S.current) {
       var f = FRUITS[S.current.level];
-      S.pointerX = clamp(toWorldX(e.clientX), WALL + f.radius, W - WALL - f.radius);
+      var rr = f.radius * (f.spriteScale || 1);
+      S.pointerX = clamp(toWorldX(e.clientX), WALL + rr, W - WALL - rr);
     } else {
       S.pointerX = clamp(toWorldX(e.clientX), WALL, W - WALL);
     }
@@ -1526,5 +1193,9 @@
   requestAnimationFrame(loop);
 
   // 调试用
-  window.__watermelon = { S: S, engine: engine, fruits: fruits, reset: resetGame, seq: spawnSeq, sprites: sprites, mg: mgStats, add: addFruit };
+  window.__watermelon = {
+    S: S, world: world, fruits: fruits, reset: resetGame,
+    seq: spawnSeq, sprites: sprites, add: addFruit,
+    pool: dropPoolSize, randLevel: randLevel
+  };
 })();
