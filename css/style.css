@@ -147,22 +147,13 @@ body {
   box-shadow: var(--shadow-1);
   overflow: hidden;
 }
-.next-chip img {
-  width: 78%;
-  height: 78%;
-  object-fit: contain;
-  display: none;
+/* 用一个 canvas 画「下一个」：和游戏里用的是同一张已烘焙贴图，
+   不会出现"显示的和落下的不是同一个"（图片走 CDN / 缓存时最容易出这种事） */
+.next-chip canvas {
+  width: 88%;
+  height: 88%;
+  display: block;
 }
-.next-chip img.on { display: block; }
-
-.next-chip i {
-  display: none;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: #ddd;
-}
-.next-chip i.on { display: block; }
 
 .icon-btn {
   width: 36px;

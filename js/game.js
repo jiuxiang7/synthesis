@@ -37,8 +37,8 @@
   var scoreEl     = document.getElementById('score');
   var bestEl      = document.getElementById('best');
   var comboEl     = document.getElementById('combo');
-  var nextImg     = document.getElementById('next-img');
-  var nextDot     = document.getElementById('next-dot');
+  var nextCanvas  = document.getElementById('next-canvas');
+  var nextCtx     = nextCanvas ? nextCanvas.getContext('2d') : null;
   var soundBtn    = document.getElementById('sound-btn');
   var loadingEl   = document.getElementById('loading');
   var loadingText = document.getElementById('loading-text');
@@ -71,8 +71,9 @@
     best: Number(storeGet('best', 0)) || 0,
     soundOn: storeGet('sound', '1') !== '0',
     time: 0,
-    current: null,        // { level, x, born }
-    nextLevel: 0,
+    current: null,        // { level, x, born } 手里这颗
+    pending: 0,           // 这颗落下后「真正会出现」的那一颗
+    nextLevel: 0,         // 「下一个」显示的：pending 之后的那一颗
     cooldown: 0,
     dragging: false,
     pointerX: W / 2,
@@ -300,8 +301,9 @@
     first = Math.min(first, Math.min(RULES.spawnLevels, FRUITS.length) - 1);
     spawnSeq.push(first);
 
-    S.current = { level: first, x: W / 2, born: S.time };
-    S.nextLevel = nextSpawnLevel();
+    S.current = { level: first, x: W / 2, born: S.time };   // 手上
+    S.pending = nextSpawnLevel();                            // 落下后到手
+    S.nextLevel = nextSpawnLevel();                          // 「下一个」显示
     updateNextChip();
   }
 
@@ -333,17 +335,37 @@
     }, 420);
   }
 
+  /* 画「下一个」。
+   *
+   * 用 canvas 而不是 <img>，因为 <img> 加载的是另一条 URL（可能走 CDN、可能被缓存），
+   * 和游戏里真正画出来的那张图不一定是同一张 —— 那就会出现"显示的是一个、落下的是另一个"。
+   * 这里直接拿 sprites[] 里已经烘焙好的画布，和场上用的是同一份像素。 */
   function updateNextChip() {
+    if (!nextCtx) return;
+    var cw = nextCanvas.width, ch = nextCanvas.height;
+    nextCtx.clearRect(0, 0, cw, ch);
+
     var f = FRUITS[S.nextLevel];
-    if (f.sprite) {
-      if (nextImg.getAttribute('src') !== f.sprite) nextImg.src = f.sprite;
-      nextImg.classList.add('on');
-      nextDot.classList.remove('on');
-    } else {
-      nextImg.classList.remove('on');
-      nextDot.classList.add('on');
-      nextDot.style.background = 'linear-gradient(180deg,' + f.color + ',' + (f.color2 || f.color) + ')';
+    if (!f) return;
+
+    var sprite = sprites[S.nextLevel];
+    if (sprite && sprite.canvas) {
+      var pad = cw * 0.05;
+      var d = Math.min(cw, ch) - pad * 2;
+      nextCtx.drawImage(sprite.canvas, (cw - d) / 2, (ch - d) / 2, d, d);
+      return;
     }
+
+    /* 没素材的兜底：画一颗渐变圆 */
+    var r = Math.min(cw, ch) * 0.38;
+    var grd = nextCtx.createRadialGradient(
+      cw / 2 - r * 0.3, ch / 2 - r * 0.3, r * 0.1, cw / 2, ch / 2, r);
+    grd.addColorStop(0, f.color);
+    grd.addColorStop(1, f.color2 || f.color);
+    nextCtx.beginPath();
+    nextCtx.arc(cw / 2, ch / 2, r, 0, Math.PI * 2);
+    nextCtx.fillStyle = grd;
+    nextCtx.fill();
   }
 
   /* ---------------------------- 投放 ---------------------------- */
@@ -355,15 +377,20 @@
     var x = clamp(S.current.x, WALL + r, W - WALL - r);
     addFruit(S.current.level, x, DROP_Y, 0, 120);
     sfx.drop();
-    S.current = null;
     S.cooldown = RULES.dropCooldown;
-  }
 
-  function spawnNext() {
-    var f = FRUITS[S.nextLevel];
-    var r = f.radius * (f.spriteScale || 1);
-    var x = clamp(S.pointerX, WALL + r, W - WALL - r);
-    S.current = { level: S.nextLevel, x: x, born: S.time };
+    /* 掉落的同时把下一颗直接拿到手上：
+     *   · 手上永远有果子（以前会有 340ms 空窗，期间既不能瞄也不能投）
+     *   · 「下一个」只在换手这一瞬间变一次，之后不再跳
+     *   · chip 永远等于"手上这颗之后的那颗"，不会和即将出现的不一致 */
+    var nx = FRUITS[S.pending];
+    var nr = nx.radius * (nx.spriteScale || 1);
+    S.current = {
+      level: S.pending,
+      x: clamp(S.pointerX, WALL + nr, W - WALL - nr),
+      born: S.time
+    };
+    S.pending = S.nextLevel;
     S.nextLevel = nextSpawnLevel();
     updateNextChip();
   }
@@ -441,6 +468,7 @@
     loadingEl.classList.add('hidden');
     if (!S.assetsReady) {
       applyShapes();                     // 素材齐了才能把形状交给物理
+      updateNextChip();                  // 素材到了，「下一个」从占位圆换成真图
       S.assetsReady = true;
       S.loadMs = Math.round(performance.now() - loadState.t0);
       if (DEBUG) console.info('[载入] 可开始游戏用时 ' + S.loadMs + 'ms');
@@ -1012,16 +1040,16 @@
   function update(dt) {
     S.time += dt;
 
-    if (S.mode === 'playing') {
-      if (S.current) {
-        var f = FRUITS[S.current.level];
-        var rr = f.radius * (f.spriteScale || 1);
-        S.pointerX = clamp(S.pointerX, WALL + rr, W - WALL - rr);
-        S.current.x += (S.pointerX - S.current.x) * (1 - Math.exp(-dt / 55));
-      } else if (S.cooldown > 0) {
-        S.cooldown -= dt;
-        if (S.cooldown <= 0) { S.cooldown = 0; spawnNext(); }
-      }
+    if (S.cooldown > 0) {
+      S.cooldown -= dt;
+      if (S.cooldown < 0) S.cooldown = 0;
+    }
+
+    if (S.mode === 'playing' && S.current) {
+      var f = FRUITS[S.current.level];
+      var rr = f.radius * (f.spriteScale || 1);
+      S.pointerX = clamp(S.pointerX, WALL + rr, W - WALL - rr);
+      S.current.x += (S.pointerX - S.current.x) * (1 - Math.exp(-dt / 55));
     }
 
     /* 物理：固定步长，最多补 4 帧。引擎内部再分 3 个子步，
